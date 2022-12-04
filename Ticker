@@ -1,36 +1,101 @@
-<!-- TradingView Widget BEGIN -->
-<div class="tradingview-widget-container">
-  <div class="tradingview-widget-container__widget"></div>
-  <div class="tradingview-widget-copyright"><a href="https://www.tradingview.com" rel="noopener" target="_blank"><span class="blue-text">Quotes</span></a> by TradingView</div>
-  <script type="text/javascript" src="https://s3.tradingview.com/external-embedding/embed-widget-tickers.js" async>
-  {
-  "symbols": [
-    {
-      "proName": "FOREXCOM:SPXUSD",
-      "title": "S&P 500"
-    },
-    {
-      "proName": "FOREXCOM:NSXUSD",
-      "title": "US 100"
-    },
-    {
-      "proName": "FX_IDC:EURUSD",
-      "title": "EUR/USD"
-    },
-    {
-      "proName": "BITSTAMP:BTCUSD",
-      "title": "Bitcoin"
-    },
-    {
-      "proName": "BITSTAMP:ETHUSD",
-      "title": "Ethereum"
-    }
-  ],
-  "colorTheme": "light",
-  "isTransparent": false,
-  "showSymbolLogo": true,
-  "locale": "en"
+
+import numpy as np
+import requests
+
+token = secret_YAqQrroQbzABi3P2tEV60m3jHCZP9y7ET1mLYl4eQTz
+databseID = My-Investments-a27e253e39dc47c4b29d885ff073ef0b
+
+headers = {
+    "Accept": "application/json",
+    "Notion-Version": "2022-06-28",
+    "Authorization": "Bearer " +token
 }
-  </script>
-</div>
-<!-- TradingView Widget END -->
+
+notionDatabase = readDatabase(databseID, headers)
+
+def readDatabase(databseID, headers):
+    readUrl = f"https://api.notion.com/v1/databases/{databseID}/query"
+
+    response = requests.post(readUrl, headers=headers)
+    print(f"readDatabase status: {response.status_code}")
+    data = response.json()
+    properties = data["results"][0]["properties"]
+
+    return {"data": data,
+            "properties": properties}
+            
+
+def getPageTitle(pageId, headers):
+    propUrl = f"https://api.notion.com/v1/pages/{pageId}/properties/title"
+    response = requests.get(propUrl, headers=headers)
+    data = response.json()
+    title = data["results"][0]["title"]["plain_text"]
+    return title
+    
+    def StockData(ticker):
+    url = "https://yahoo-finance97.p.rapidapi.com/stock-info"
+    payload = f"symbol={ticker}"
+    headers = {
+        "content-type": "application/x-www-form-urlencoded",
+        "X-RapidAPI-Key": #YOUR-SECRET-KEY,
+        "X-RapidAPI-Host": "yahoo-finance97.p.rapidapi.com"
+    }
+    try:
+        response = requests.request("POST", url, data=payload, headers=headers)
+
+        d = response.json()
+
+        return {
+            "currentPrice":d["data"]["currentPrice"],
+            "dividend":d["data"]["dividendRate"],
+            "dividendYield": d["data"]["dividendYield"],
+            "fiveYearAvgDividendYield": d["data"]["fiveYearAvgDividendYield"] / 100 if d["data"]["fiveYearAvgDividendYield"] != None else None,
+            "pb":d["data"]["priceToBook"],
+            "fwdPE":d["data"]["forwardPE"],
+            "payoutRatio":d["data"]["payoutRatio"],
+            "debtToMcap":d["data"]["totalDebt"]/d["data"]["marketCap"],
+        }
+    except Exception as e:
+        print(f"StockData error: {e}")
+        
+        
+def updatePage(pageId, headers, p, d, y, y5, pb, pe, pr, dr):
+    updateUrl = f"https://api.notion.com/v1/pages/{pageId}"
+    updateData = {
+        "properties": {
+            "Price": p,
+            "Dividend": d,
+            "Yield":y,
+            '5Y avg. Yield': y5,
+            "P/B": pb,
+            "P/E": pe,
+            'Payout Ratio (%)': pr,
+            'KcGe':dr,
+        }
+    }
+    response = requests.patch(updateUrl, json=updateData, headers=headers)
+    print(response)
+    
+    for i in np.arange(len(notionDatabase["data"]["results"])):
+    try:
+        #get pages (rows) in datbase:
+        pageId = notionDatabase["data"]["results"][i]["id"]
+        pageTitle = getPageTitle(pageId, headers)
+
+        # get data from Yahoo Finance:
+        d = StockData(pageTitle)
+
+        #update Notion database:
+        updatePage(pageId, headers,
+                   p=d["currentPrice"],
+                   d=d["dividend"],
+                   y=d["dividendYield"],
+                   y5=d["fiveYearAvgDividendYield"],
+                   pb=d["pb"],
+                   pe=d["fwdPE"],
+                   pr=d["payoutRatio"],
+                   dr=d["debtToMcap"]
+                  )
+
+    except Exception as e:
+        print(e)
