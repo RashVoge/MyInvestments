@@ -1,101 +1,166 @@
+from __future__ import print_function
+import pickle
+import os.path
+import threading
+import sys
+import math
 
-import numpy as np
-import requests
+import yfinance as yf
+from notionpy.notion.client import NotionClient
+from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor
 
-token = secret_YAqQrroQbzABi3P2tEV60m3jHCZP9y7ET1mLYl4eQTz
-databseID = My-Investments-a27e253e39dc47c4b29d885ff073ef0b
+# start - CHANGE THESE
+NOTION_V2_TOKEN = "<NOTION_V2_TOKEN>" 
+NOTION_PAGE_LINK = "<NOTION_PAGE_LINK>"
 
-headers = {
-    "Accept": "application/json",
-    "Notion-Version": "2022-06-28",
-    "Authorization": "Bearer " +token
-}
+STOCK_SYMBOLS_LIST = 1
+REFRESH_BUTTON_POSITION = 3
+UPDATING_POSITION = 4
+DATABASE_POSITION = 6
+# end   - CHANGE THESE
 
-notionDatabase = readDatabase(databseID, headers)
+def get_stock_symbols():
+    client = NotionClient(token_v2=NOTION_V2_TOKEN)
+    page = client.get_block(NOTION_PAGE_LINK)
+    refresh_button = page.children[STOCK_SYMBOLS_LIST]
 
-def readDatabase(databseID, headers):
-    readUrl = f"https://api.notion.com/v1/databases/{databseID}/query"
+    clear_table()
 
-    response = requests.post(readUrl, headers=headers)
-    print(f"readDatabase status: {response.status_code}")
-    data = response.json()
-    properties = data["results"][0]["properties"]
+    raw_symbols = refresh_button.title
+    symbols = [x.strip() for x in raw_symbols.split(",")]
 
-    return {"data": data,
-            "properties": properties}
-            
+    return symbols
 
-def getPageTitle(pageId, headers):
-    propUrl = f"https://api.notion.com/v1/pages/{pageId}/properties/title"
-    response = requests.get(propUrl, headers=headers)
-    data = response.json()
-    title = data["results"][0]["title"]["plain_text"]
-    return title
-    
-    def StockData(ticker):
-    url = "https://yahoo-finance97.p.rapidapi.com/stock-info"
-    payload = f"symbol={ticker}"
-    headers = {
-        "content-type": "application/x-www-form-urlencoded",
-        "X-RapidAPI-Key": #YOUR-SECRET-KEY,
-        "X-RapidAPI-Host": "yahoo-finance97.p.rapidapi.com"
-    }
-    try:
-        response = requests.request("POST", url, data=payload, headers=headers)
+def clear_table():
+    client = NotionClient(token_v2=NOTION_V2_TOKEN)
+    page = client.get_block(NOTION_PAGE_LINK)
+    database = page.children[DATABASE_POSITION].collection
+    updating_indicator = page.children[UPDATING_POSITION]
 
-        d = response.json()
+    updating_indicator.title = "🗑  Clearing Stocks table"
 
-        return {
-            "currentPrice":d["data"]["currentPrice"],
-            "dividend":d["data"]["dividendRate"],
-            "dividendYield": d["data"]["dividendYield"],
-            "fiveYearAvgDividendYield": d["data"]["fiveYearAvgDividendYield"] / 100 if d["data"]["fiveYearAvgDividendYield"] != None else None,
-            "pb":d["data"]["priceToBook"],
-            "fwdPE":d["data"]["forwardPE"],
-            "payoutRatio":d["data"]["payoutRatio"],
-            "debtToMcap":d["data"]["totalDebt"]/d["data"]["marketCap"],
-        }
-    except Exception as e:
-        print(f"StockData error: {e}")
-        
-        
-def updatePage(pageId, headers, p, d, y, y5, pb, pe, pr, dr):
-    updateUrl = f"https://api.notion.com/v1/pages/{pageId}"
-    updateData = {
-        "properties": {
-            "Price": p,
-            "Dividend": d,
-            "Yield":y,
-            '5Y avg. Yield': y5,
-            "P/B": pb,
-            "P/E": pe,
-            'Payout Ratio (%)': pr,
-            'KcGe':dr,
-        }
-    }
-    response = requests.patch(updateUrl, json=updateData, headers=headers)
-    print(response)
-    
-    for i in np.arange(len(notionDatabase["data"]["results"])):
-    try:
-        #get pages (rows) in datbase:
-        pageId = notionDatabase["data"]["results"][i]["id"]
-        pageTitle = getPageTitle(pageId, headers)
+    rows = database.get_rows()
+    for row in rows:
+        row.remove()
 
-        # get data from Yahoo Finance:
-        d = StockData(pageTitle)
+    updating_indicator.title = "🌱  Stocks table is ready to go"
 
-        #update Notion database:
-        updatePage(pageId, headers,
-                   p=d["currentPrice"],
-                   d=d["dividend"],
-                   y=d["dividendYield"],
-                   y5=d["fiveYearAvgDividendYield"],
-                   pb=d["pb"],
-                   pe=d["fwdPE"],
-                   pr=d["payoutRatio"],
-                   dr=d["debtToMcap"]
-                  )
+def enter_symbols(symbols):
+    client = NotionClient(token_v2=NOTION_V2_TOKEN)
+    page = client.get_block(NOTION_PAGE_LINK)
+    database = page.children[DATABASE_POSITION].collection
+    updating_indicator = page.children[UPDATING_POSITION]
 
-    except Exception as e:
-        print(e)
+    updating_indicator.title = "🔥 Updating Symbols -- progress: %s/%s" % (str(0), str(len(symbols)))
+
+    for i, symbol in enumerate(symbols):
+        row = database.add_row()
+        row.symbol = symbol
+        updating_indicator.title = "🔥  Updating Symbols -- progress: %s/%s" % (str(i+1), str(len(symbols)))
+
+    updating_indicator.title = "👀  Symbols updated!"
+
+def populate_stock_data():
+    client = NotionClient(token_v2=NOTION_V2_TOKEN)
+    page = client.get_block(NOTION_PAGE_LINK)
+    database = page.children[DATABASE_POSITION].collection
+    symbols = get_stock_symbols()
+
+    PARTITIONS = min(len(symbols), 10)
+    executor = ThreadPoolExecutor(max_workers=PARTITIONS)
+    for symbols_sub in [symbols[int(i*len(symbols)/PARTITIONS): int(i*len(symbols)/PARTITIONS + len(symbols)/PARTITIONS)] for i in range(PARTITIONS)]:
+        executor.submit(process_rows, (symbols_sub))
+
+def process_rows(symbols):
+    client = NotionClient(token_v2=NOTION_V2_TOKEN)
+    page = client.get_block(NOTION_PAGE_LINK)
+    database = page.children[DATABASE_POSITION].collection
+
+    updating_indicator = page.children[UPDATING_POSITION]
+
+    success = True
+    failed_to_load = []
+    for i, symbol in enumerate(symbols):
+        stock = yf.Ticker(symbol)
+
+        updating_indicator.title = "🟡  _Stocks are currently updating_" 
+        try:
+            info = stock.info
+            hist = stock.history(period="1y")
+
+            name = info['shortName']
+            descr = info['longBusinessSummary'] 
+            price = info['open']
+            category = info['category']
+            min52Week = min(hist['Close'])
+            max52Week = max(hist['Close'])
+            latestPrice = hist['Close'].values.tolist()[-1]
+            ratio = (latestPrice - min52Week) / (max52Week - min52Week)
+            sector = info['sector']
+            dividend_rate = info['trailingAnnualDividendYield'] if 'trailingAnnualDividendYield' in info else 0.0
+            pe_ratio = info['forwardPE'] if 'forwardPE' in info else -1
+            market_cap = info['marketCap'] if 'marketCap' in info else 0
+            price_to_sales_ratio = info['priceToSalesTrailing12Months'] if 'priceToSalesTrailing12Months' in info else 0.0
+            eps = info['forwardEps'] if 'forwardEps' in info else 0.0
+
+            row = database.add_row(
+                symbol=symbol, 
+                name=name,
+                price=price,
+                year_low=min52Week,
+                year_high=max52Week,
+                ratio=round(ratio or -1, 2),
+                dividend=dividend_rate and round(dividend_rate * 1000, 2) / 1000,
+                sector=sector or "",
+                description=descr[0:150] + "...",
+                pe=round(pe_ratio or -1, 2),
+                market_cap='$' + str(round(market_cap / 1000000000 or -1, 1)) + ' B',
+                price_to_sales=round(price_to_sales_ratio or -1, 2),
+                eps=eps
+            )
+        except:
+            success = False
+            failed_to_load.append(symbol)
+
+    if success:
+        updating_indicator.title = "✅  Stocks have been updated as of `%s`" % get_datetime()
+    else:
+        updating_indicator.title = "🚨  Error loading %s" % ', '.join(failed_to_load)
+
+def callback():
+    client = NotionClient(token_v2=NOTION_V2_TOKEN)
+    page = client.get_block(NOTION_PAGE_LINK)
+    refresh_button = page.children[REFRESH_BUTTON_POSITION]
+    updating_indicator = page.children[UPDATING_POSITION]
+
+    if refresh_button.checked == True:
+        refresh_button.checked = False
+        main()
+
+def set_interval(func, sec):
+    def func_wrapper():
+        set_interval(func, sec)
+        func()
+    t = threading.Timer(sec, func_wrapper)
+    t.start()
+    return t
+
+def get_datetime():
+    now = datetime.now()
+    dt_string = now.strftime("%d/%m/%Y at %I:%M %p")
+    return dt_string
+
+def main():
+    client = NotionClient(token_v2=NOTION_V2_TOKEN)
+    page = client.get_block(NOTION_PAGE_LINK)
+    refresh_button = page.children[REFRESH_BUTTON_POSITION]
+
+    # symbols = get_stock_symbols()
+    # enter_symbols(symbols)
+    populate_stock_data()
+
+if __name__ == '__main__':
+    main()
+    set_interval(callback, 2)
+    set_interval(main, 60 * 60 * 6)
