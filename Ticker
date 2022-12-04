@@ -11,8 +11,8 @@ from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
 
 # start - CHANGE THESE
-NOTION_V2_TOKEN = "<NOTION_V2_TOKEN>" 
-NOTION_PAGE_LINK = "<NOTION_PAGE_LINK>"
+NOTION_V2_TOKEN = "secret_YAqQrroQbzABi3P2tEV60m3jHCZP9y7ET1mLYl4eQTz" 
+NOTION_PAGE_LINK = "https://www.notion.so/My-Investments-a27e253e39dc47c4b29d885ff073ef0b"
 
 STOCK_SYMBOLS_LIST = 1
 REFRESH_BUTTON_POSITION = 3
